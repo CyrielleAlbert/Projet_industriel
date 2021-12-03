@@ -40,7 +40,8 @@ from os import listdir
 with_opencv = initialize_opencv()
 if with_opencv:
     from opencv_pose_estimation import pose_estimation
-
+import cv2
+from PIL import Image
 
 def read_rgbd_image(color_file, depth_file, convert_rgb_to_intensity, config):
     color = o3d.io.read_image(color_file)
@@ -140,7 +141,8 @@ def integrate_rgb_frames_for_fragment(color_files, depth_files, fragment_id,
                                       config):
     pose_graph = o3d.io.read_pose_graph(pose_graph_name)
     volume = o3d.pipelines.integration.ScalableTSDFVolume(
-        voxel_length=config['tsdf_cubic_size'] / 512,
+        voxel_length=config["tsdf_cubic_size"]/512,
+        #voxel_length=1,
         sdf_trunc=0.04,
         color_type=o3d.pipelines.integration.TSDFVolumeColorType.RGB8
     )
@@ -150,18 +152,23 @@ def integrate_rgb_frames_for_fragment(color_files, depth_files, fragment_id,
         print(
             "Fragment %03d / %03d :: integrate rgbd frame %d (%d of %d)." %
             (fragment_id, n_fragments - 1, i_abs, i + 1, len(pose_graph.nodes)))
-        rgbd = read_rgbd_image(color_files[i_abs], depth_files[i_abs], False,
-                               config)
-        pt_cloud = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd,intrinsic)
-        rgbds.append(pt_cloud)
+
+        color_arr = o3d.io.read_image(color_files[i_abs])
+        depth_arr = o3d.io.read_image(depth_files[i_abs])
+        print(np.max(depth_arr))
+        rgbd =  o3d.geometry.RGBDImage.create_from_color_and_depth(color_arr,depth_arr,depth_scale=1,depth_trunc= np.inf,convert_rgb_to_intensity=False)
+        print(np.max(np.asarray(rgbd.depth)))
         pose = pose_graph.nodes[i].pose
         extrinsic = np.linalg.inv(pose)
-
+        print("\nextrinsic: ",extrinsic,"\n\n")
+        print("intrinsic: ",intrinsic,"\n\n")
+        print("RGBDImage: ",rgbd,"\n")
         volume.integrate(rgbd, intrinsic, extrinsic)
-        print(volume)
-    o3d.visualization.draw_geometries([rgbds[0]])
+        point_cloud =  volume.extract_point_cloud()
+        #o3d.visualization.draw_geometries([point_cloud])
     mesh = volume.extract_triangle_mesh()
     mesh.compute_vertex_normals()
+    o3d.visualization.draw_geometries([mesh])
     return mesh
 
 
@@ -178,7 +185,6 @@ def make_pointcloud_for_fragment(path_dataset, color_files, depth_files,
     pcd_name = join(path_dataset,
                     config["template_fragment_pointcloud"] % fragment_id)
     hi = o3d.io.write_point_cloud(pcd_name, pcd)
-    print(hi)
 
 
 def process_single_fragment(fragment_id, color_files, depth_files, n_files,
@@ -187,7 +193,12 @@ def process_single_fragment(fragment_id, color_files, depth_files, n_files,
         intrinsic = o3d.io.read_pinhole_camera_intrinsic(
             config["path_intrinsic"])
     else:
-        intrinsic = o3d.camera.PinholeCameraIntrinsic(width=960,height=1280,cx=480,cy=640,fx=500,fy=500)
+        intrinsic = o3d.camera.PinholeCameraIntrinsic(width=config["intrinsic_info"]["width"],
+                                                      height=config["intrinsic_info"]["height"],
+                                                      cx=config["intrinsic_info"]["cx"],
+                                                      cy=config["intrinsic_info"]["cy"],
+                                                      fx=config["intrinsic_info"]["f"],
+                                                      fy=config["intrinsic_info"]["f"])
     sid = fragment_id * config['n_frames_per_fragment']
     eid = min(sid + config['n_frames_per_fragment'], n_files)
 
@@ -205,8 +216,13 @@ def run(config):
     print("making fragments from RGBD sequence.")
     make_clean_folder(join(config["path_dataset"], config["folder_fragment"]))
     images_names = listdir(config["path_dataset"]+"/image/")
-    color_files = ['./../../RGBD/image/'+ img_name for img_name in images_names]
-    depth_files = ['./../../RGBD/depth/'+ img_name for img_name in images_names]    
+    try:
+        images_names.remove("Thumbs.db")
+    except:
+        print("no Thunbs.db")
+    color_files = np.array([config["path_dataset"]+'image/'+ img_name for img_name in images_names])[0:99].tolist()
+    depth_files = np.array([config["path_dataset"]+'depth2/'+ img_name for img_name in images_names])[0:99].tolist()   
+
     n_files = len(color_files)
     n_fragments = int(
         math.ceil(float(n_files) / config['n_frames_per_fragment']))
